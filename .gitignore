@@ -1,0 +1,11 @@
+# working / source files used to build the playlist
+src_*.m3u
+iptv_list.md
+id.json
+sp.json
+mv.json
+tested.json
+list_*.txt
+parse.py
+build.py
+assemble.py
