@@ -9,3 +9,4 @@ list_*.txt
 parse.py
 build.py
 assemble.py
+thorough.py
