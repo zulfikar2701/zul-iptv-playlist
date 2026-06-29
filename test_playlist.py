@@ -57,34 +57,67 @@ def headers(ch):
     return ua, ref
 
 
-def test_channel(ch, seconds=8, timeout=60):
-    """Return (ok, frames_decoded). ok means ffmpeg decoded real video."""
+def _frozen_fraction(stderr, total):
+    """Fraction of the sample that ffmpeg's freezedetect flagged as frozen."""
+    if total <= 0:
+        return 0.0
+    starts = [float(x) for x in re.findall(r"freeze_start:\s*([\d.]+)", stderr)]
+    ends = [float(x) for x in re.findall(r"freeze_end:\s*([\d.]+)", stderr)]
+    frozen = 0.0
+    for i, s in enumerate(starts):
+        e = ends[i] if i < len(ends) else total  # open freeze runs to the end
+        frozen += max(0.0, min(e, total) - s)
+    return frozen / total
+
+
+def test_channel(ch, seconds=18, timeout=60, freeze_thresh=0.6):
+    """
+    Decode the stream with ffmpeg AND run freezedetect.
+    Returns (status, frames) where status is one of:
+      'OK'      - decoded real, moving video
+      'STATIC'  - decoded video but it is a frozen logo / standby slate
+      'DEAD'    - no video decoded (stream dead / geo-blocked)
+      'TIMEOUT' - ffmpeg did not finish in time
+      'ERR'     - other error
+    """
     ua, ref = headers(ch)
     args = ["ffmpeg", "-nostdin", "-hide_banner", "-rw_timeout", "15000000"]
     if ua:
         args += ["-user_agent", ua]
     if ref:
         args += ["-headers", f"Referer: {ref}\r\n"]
-    args += ["-i", ch["url"], "-t", str(seconds), "-an", "-f", "null", "-"]
+    args += ["-i", ch["url"], "-t", str(seconds),
+             "-vf", "freezedetect=n=-50dB:d=3", "-map", "0:v:0", "-an",
+             "-f", "null", "-"]
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                            encoding="utf-8", errors="ignore")
         frames = [int(x) for x in re.findall(r"frame=\s*(\d+)", p.stderr)]
-        return (max(frames) if frames else 0), False
+        f = max(frames) if frames else 0
+        if f < 25:
+            return "DEAD", f
+        tmatch = re.findall(r"time=(\d+):(\d+):([\d.]+)", p.stderr)
+        total = 0.0
+        if tmatch:
+            h, m, s = tmatch[-1]
+            total = int(h) * 3600 + int(m) * 60 + float(s)
+        if _frozen_fraction(p.stderr, total or seconds) > freeze_thresh:
+            return "STATIC", f
+        return "OK", f
     except subprocess.TimeoutExpired:
-        return -1, True
+        return "TIMEOUT", -1
     except Exception:
-        return -2, True
+        return "ERR", -2
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("playlist", nargs="?", default="ZUL-IPTV.m3u")
-    ap.add_argument("--min-frames", type=int, default=25)
     # decoding is CPU heavy; too many parallel workers can cause false TIMEOUTs.
     # Use --workers 1 for a definitive check of a flaky channel.
     ap.add_argument("--workers", type=int, default=3)
-    ap.add_argument("--seconds", type=int, default=8)
+    ap.add_argument("--seconds", type=int, default=18,
+                    help="sample length; longer gives freezedetect more to work with")
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--prune", action="store_true",
                     help="rewrite the playlist keeping only working channels")
@@ -92,27 +125,28 @@ def main():
 
     channels = parse_m3u(args.playlist)
     print(f"Testing {len(channels)} channels in {args.playlist} "
-          f"(decoding {args.seconds}s, need >= {args.min_frames} frames)\n", flush=True)
+          f"(decode + freeze check, {args.seconds}s each)\n", flush=True)
 
     def run(ch):
-        frames, _ = test_channel(ch, args.seconds, args.timeout)
-        return ch, frames
+        status, frames = test_channel(ch, args.seconds, args.timeout)
+        return ch, status, frames
 
     working, results = [], []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for ch, frames in ex.map(run, channels):
-            ok = frames >= args.min_frames
-            label = ("TIMEOUT" if frames == -1 else "ERR" if frames == -2
-                     else f"{frames}f")
-            print(f"{'OK ' if ok else 'XX '} {label:>8}  {ch['name']}", flush=True)
-            results.append((ch, ok))
+        for ch, status, frames in ex.map(run, channels):
+            ok = status == "OK"
+            fr = f"{frames}f" if frames >= 0 else ""
+            print(f"{'OK ' if ok else 'XX '} {status:8} {fr:>6}  {ch['name']}",
+                  flush=True)
+            results.append((ch, ok, status))
             if ok:
                 working.append(ch)
 
     print(f"\nWorking: {len(working)}/{len(channels)}")
-    dead = [c["name"] for c, ok in results if not ok]
-    if dead:
-        print("Not playing:", ", ".join(dead))
+    for label in ("STATIC", "DEAD", "TIMEOUT", "ERR"):
+        bad = [c["name"] for c, ok, s in results if s == label]
+        if bad:
+            print(f"{label}:", ", ".join(bad))
 
     if args.prune:
         out = ["#EXTM3U"]

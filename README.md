@@ -2,8 +2,9 @@
 
 A hand-curated IPTV playlist (`ZUL-IPTV.m3u`) for use on Samsung TV (and any
 M3U-compatible player) from the Jakarta / Bekasi area. **Every channel is
-verified to actually decode video** (not just return an HTTP 200), so you should
-not get the "logo only, no picture" problem.
+verified to decode real, moving video** — the tester runs ffmpeg *and*
+`freezedetect`, so channels that merely show a frozen logo / standby slate (a
+common cause of the "logo only, no picture" problem) are rejected too.
 
 ## How to use on a Samsung TV
 
@@ -30,10 +31,12 @@ public lists (Indonesian, Sports, Movies) according to:
 
 ## Groups
 
-- **Indonesia** – Nusantara TV, TVRI (national + Jakarta), RRI Net, Magna
-  Channel, ROCK Action, Nickelodeon Asia, Indonesiana.TV, Jawa Pos TV, etc.
+- **Indonesia** – Nusantara TV, Magna Channel, ROCK Action, Nickelodeon Asia,
+  Indonesiana.TV, Jawa Pos TV, Music Information Channel, Stara TV, JTV,
+  Bandung TV, Jogja Istimewa TV.
 - **Sports - World Cup 2026** – FIFA+ (several languages), beIN Sports USA /
-  XTRA, SPOTV / SPOTV 2, Star Sports 1 HD, Alkass One.
+  XTRA, SPOTV / SPOTV 2, Star Sports 1 HD, Alkass One, ARD / Das Erste (German
+  FTA World Cup broadcaster, international feed).
 - **Sports** – Real Madrid TV, Sportitalia, SuperTennis, Win Sports, NHL
   Network, Red Bull TV, Polsat Sport.
 - **Movies** – AMC, IFC, SYFY, Paramount Network, AXN, Starz Cinema, Lifetime
@@ -44,22 +47,28 @@ public lists (Indonesian, Sports, Movies) according to:
 
 IPTV streams are community-maintained and go offline without notice. Use the
 included tester to re-verify the playlist at any time. It **decodes video with
-ffmpeg** (honouring each channel's user-agent / referrer headers) rather than
-just checking that a URL responds — that is what reliably catches the
-"channel shows only a logo" case.
+ffmpeg and runs `freezedetect`** (honouring each channel's user-agent / referrer
+headers) rather than just checking that a URL responds. Each channel is
+classified as:
+
+- `OK` – decoded real, moving video
+- `STATIC` – decoded video, but it's a frozen logo / standby slate (rejected)
+- `DEAD` – no video decoded (stream dead or geo-blocked)
+- `TIMEOUT` / `ERR` – did not finish / other error
+
+The `STATIC` check is what catches the "channel shows only a logo" case (e.g.
+TVRI was serving a static logo even though frames were arriving).
 
 ```bash
 # requires ffmpeg + ffprobe on PATH and Python 3.8+
 python test_playlist.py                 # test ZUL-IPTV.m3u and print a report
-python test_playlist.py --prune         # rewrite the playlist, dropping dead channels
+python test_playlist.py --prune         # rewrite the playlist, dropping bad channels
 python test_playlist.py --workers 1     # definitive check of a flaky channel
-python test_playlist.py --min-frames 40 # stricter pass threshold
+python test_playlist.py --seconds 30    # longer sample (more reliable freeze check)
 ```
 
-A channel passes only if ffmpeg decodes at least `--min-frames` (default 25)
-frames within the time limit. Note that running many decodes in parallel is
-CPU-heavy and can cause false `TIMEOUT`s; re-check anything suspicious with
-`--workers 1`.
+Note that running many decodes in parallel is CPU-heavy and can cause false
+`TIMEOUT`s; re-check anything suspicious with `--workers 1`.
 
 ## Notes
 
@@ -67,11 +76,16 @@ CPU-heavy and can cause false `TIMEOUT`s; re-check anything suspicious with
   tvOne, iNews, Kompas, Moji) are **not included**: in this free public source
   they are dead or DRM/geo-locked and fail the decode test. They are generally
   only available via licensed apps (Vidio, RCTI+, etc.).
-- **TVP Sport** was requested but its stream in this source does not play (0
-  frames decoded), so it was left out. Re-run `test_playlist.py` later in case
-  it comes back, or substitute another working sports channel.
 - World Cup 2026 live-match availability on these free streams is not
   guaranteed; the actual Indonesian rights holder may be EMTEK / Vidio.
+- **Requested satellite channels:** of the European / Turkish FTA World Cup
+  broadcasters checked (SRF zwei, RTS 2, RSI La 2, TVP Sport, TVP1, Sport1,
+  M4 Sport, TRT 1, ARD, ZDF, Arena Premium 1, Sport Klub), only **ARD / Das
+  Erste** has a stream that plays from Indonesia (its `/int/` international
+  feed). The Swiss SRF/RTS/RSI channels are not in iptv-org at all; the rest are
+  geo-locked to their home country and decode 0 frames here. They can't be
+  fixed from this free source — they'd require a paid IPTV provider or a VPN
+  exit in the relevant country.
 
 Source lists:
 - Indonesia: https://iptv-org.github.io/iptv/languages/ind.m3u

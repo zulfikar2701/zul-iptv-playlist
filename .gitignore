@@ -10,3 +10,10 @@ parse.py
 build.py
 assemble.py
 thorough.py
+
+# python
+__pycache__/
+cc_*.m3u
+frame_*.jpg
+examine*.py
+finalize.py
